@@ -428,14 +428,17 @@ def main() -> None:
             video_processor_factory=ProcesadorWebcamNavegador,
             media_stream_constraints={
                 "video": {
-                    "width": {"ideal": CONFIG["camera"]["width"]},
-                    "height": {"ideal": CONFIG["camera"]["height"]},
-                    "facingMode": "user",
+                    # 640x480 es una resolución compatible con webcams USB y
+                    # suficiente para Face Mesh; evita enviar video 4K desde PC.
+                    "width": {"ideal": 640, "max": 1280},
+                    "height": {"ideal": 480, "max": 720},
                 },
                 "audio": False,
             },
             rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-            async_processing=True,
+            # El pipeline mantiene estado temporal (PERCLOS, parpadeos y
+            # calibración), por lo que los frames deben procesarse en orden.
+            async_processing=False,
         )
 
     with col_panel:
