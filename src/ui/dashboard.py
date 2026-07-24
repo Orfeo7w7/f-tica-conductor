@@ -331,6 +331,57 @@ def _panel_estadisticas(contenedor, session_stats) -> None:
     )
 
 
+def _panel_en_vivo(contexto) -> None:
+    """Actualiza el tablero sin reiniciar la transmisión WebRTC.
+
+    El callback de WebRTC procesa los frames en segundo plano. Un fragmento
+    consulta su último resultado cada segundo para que el riesgo, la telemetría
+    y el historial reflejen la detección en tiempo real.
+    """
+
+    @st.fragment(run_every=1.0)
+    def actualizar() -> None:
+        procesador = contexto.video_processor
+        resultado = procesador.ultimo_resultado() if procesador else {}
+
+        if not resultado:
+            st.info("Esperando video del navegador. Permita la cámara y presione START.")
+            st.plotly_chart(_crear_gauge_riesgo(0, "BAJO"), use_container_width=True)
+            return
+
+        nivel = resultado["nivel_riesgo"]
+        tipo_alerta = resultado["tipo_alerta"]
+        if resultado.get("calibrando"):
+            st.markdown(
+                f'<div class="hud-alert-banner" style="--c:{TEMA["accent_cyan"]}">'
+                "CALIBRANDO :: MANTENGA LOS OJOS ABIERTOS CON NORMALIDAD</div>",
+                unsafe_allow_html=True,
+            )
+            _panel_calibracion(st, resultado)
+        else:
+            color = _COLOR_NIVEL.get(nivel, TEMA["accent_green"])
+            st.markdown(
+                f'<div class="hud-alert-banner" style="--c:{color}">'
+                f"RIESGO {nivel} :: {tipo_alerta.replace('_', ' ')}</div>",
+                unsafe_allow_html=True,
+            )
+            _panel_metricas_placeholder(st, resultado)
+
+        st.plotly_chart(_crear_gauge_riesgo(resultado["riesgo"], nivel), use_container_width=True)
+        st.plotly_chart(
+            _crear_barras_variables(
+                resultado.get("somnolencia", 0.0),
+                resultado.get("distraccion", 0.0),
+                resultado.get("celular", 0.0),
+            ),
+            use_container_width=True,
+        )
+        _panel_estadisticas(st, procesador.pipeline.session_stats)
+        _panel_historial(st, procesador.pipeline.session_stats)
+
+    actualizar()
+
+
 def main() -> None:
     """Función principal del dashboard Streamlit."""
     st.set_page_config(
@@ -352,12 +403,8 @@ def main() -> None:
 
     col_video, col_panel = st.columns([2, 1])
     video_slot = col_video.empty()
-    alerta_slot = col_video.empty()
     gauge_slot = col_panel.empty()
-    barras_slot = col_panel.empty()
     metricas_slot = col_panel.empty()
-    historial_slot = col_video.empty()
-    stats_slot = col_panel.empty()
 
     if not activo:
         video_slot.markdown(
@@ -391,48 +438,8 @@ def main() -> None:
             async_processing=True,
         )
 
-    resultado = {}
-    if contexto.video_processor:
-        resultado = contexto.video_processor.ultimo_resultado()
-
-    if not resultado:
-        alerta_slot.markdown(
-            f'<div class="hud-alert-banner" style="--c:{TEMA["accent_cyan"]}">'
-            "CAMARA DEL NAVEGADOR LISTA :: PRESIONE START PARA COMENZAR</div>",
-            unsafe_allow_html=True,
-        )
-        gauge_slot.plotly_chart(_crear_gauge_riesgo(0, "BAJO"), use_container_width=True)
-        return
-
-    nivel = resultado["nivel_riesgo"]
-    tipo_alerta = resultado["tipo_alerta"]
-    if resultado.get("calibrando"):
-        alerta_slot.markdown(
-            f'<div class="hud-alert-banner" style="--c:{TEMA["accent_cyan"]}">'
-            "CALIBRANDO :: MANTENGA LOS OJOS ABIERTOS CON NORMALIDAD</div>",
-            unsafe_allow_html=True,
-        )
-        _panel_calibracion(metricas_slot, resultado)
-    else:
-        color = _COLOR_NIVEL.get(nivel, TEMA["accent_green"])
-        alerta_slot.markdown(
-            f'<div class="hud-alert-banner" style="--c:{color}">'
-            f"RIESGO {nivel} :: {tipo_alerta.replace('_', ' ')}</div>",
-            unsafe_allow_html=True,
-        )
-        _panel_metricas_placeholder(metricas_slot, resultado)
-
-    gauge_slot.plotly_chart(_crear_gauge_riesgo(resultado["riesgo"], nivel), use_container_width=True)
-    barras_slot.plotly_chart(
-        _crear_barras_variables(
-            resultado.get("somnolencia", 0.0),
-            resultado.get("distraccion", 0.0),
-            resultado.get("celular", 0.0),
-        ),
-        use_container_width=True,
-    )
-    _panel_estadisticas(stats_slot, contexto.video_processor.pipeline.session_stats)
-    _panel_historial(historial_slot, contexto.video_processor.pipeline.session_stats)
+    with col_panel:
+        _panel_en_vivo(contexto)
 
 
 if __name__ == "__main__":
