@@ -10,14 +10,15 @@ from __future__ import annotations
 
 import os
 import sys
-import time
+import threading
 
+import av
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from src.camera.video_capture import VideoCapture
 from src.main import Pipeline
 from src.utils.config_loader import cargar_config
 
@@ -30,6 +31,35 @@ _COLOR_NIVEL = {
     "ALTO": TEMA["accent_orange"],
     "CRITICO": TEMA["accent_red"],
 }
+
+
+class ProcesadorWebcamNavegador(VideoProcessorBase):
+    """Procesa la cámara del navegador y devuelve cada frame anotado.
+
+    La cámara se captura en el navegador del visitante mediante WebRTC; nunca
+    se intenta abrir un dispositivo de video en el servidor de Streamlit.
+    """
+
+    def __init__(self) -> None:
+        self.pipeline = Pipeline(CONFIG)
+        self._ultimo_resultado: dict = {}
+        self._lock = threading.Lock()
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        frame_bgr = frame.to_ndarray(format="bgr24")
+        resultado = self.pipeline.procesar_frame(frame_bgr)
+        resumen = {clave: valor for clave, valor in resultado.items() if clave != "frame"}
+        with self._lock:
+            self._ultimo_resultado = resumen
+        return av.VideoFrame.from_ndarray(resultado["frame"], format="bgr24")
+
+    def ultimo_resultado(self) -> dict:
+        """Retorna una copia del último estado disponible para la interfaz."""
+        with self._lock:
+            return dict(self._ultimo_resultado)
+
+    def on_ended(self) -> None:
+        self.pipeline.cerrar()
 
 
 def _inyectar_css() -> None:
@@ -317,9 +347,6 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    if "pipeline" not in st.session_state:
-        st.session_state.pipeline = Pipeline(CONFIG)
-
     col_control, _ = st.columns([1, 5])
     activo = col_control.toggle("ACTIVAR MONITOREO", key="activo")
 
@@ -332,8 +359,6 @@ def main() -> None:
     historial_slot = col_video.empty()
     stats_slot = col_panel.empty()
 
-    pipeline = st.session_state.pipeline
-
     if not activo:
         video_slot.markdown(
             f'<div class="hud-panel" style="height:480px; display:flex; '
@@ -345,67 +370,69 @@ def main() -> None:
         gauge_slot.plotly_chart(
             _crear_gauge_riesgo(0, "BAJO"), use_container_width=True, key="gauge_riesgo_idle"
         )
-        _panel_estadisticas(stats_slot, pipeline.session_stats)
-        _panel_historial(historial_slot, pipeline.session_stats)
+        metricas_slot.info("Active el monitoreo y permita el acceso a la cámara cuando el navegador lo solicite.")
         return
 
-    camara = VideoCapture(
-        camera_index=CONFIG["camera"]["index"],
-        width=CONFIG["camera"]["width"],
-        height=CONFIG["camera"]["height"],
+    with col_video:
+        st.caption("Permita el acceso a la cámara y presione START para iniciar el análisis en tiempo real.")
+        contexto = webrtc_streamer(
+            key="camara-navegador",
+            mode=WebRtcMode.SENDRECV,
+            video_processor_factory=ProcesadorWebcamNavegador,
+            media_stream_constraints={
+                "video": {
+                    "width": {"ideal": CONFIG["camera"]["width"]},
+                    "height": {"ideal": CONFIG["camera"]["height"]},
+                    "facingMode": "user",
+                },
+                "audio": False,
+            },
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            async_processing=True,
+        )
+
+    resultado = {}
+    if contexto.video_processor:
+        resultado = contexto.video_processor.ultimo_resultado()
+
+    if not resultado:
+        alerta_slot.markdown(
+            f'<div class="hud-alert-banner" style="--c:{TEMA["accent_cyan"]}">'
+            "CAMARA DEL NAVEGADOR LISTA :: PRESIONE START PARA COMENZAR</div>",
+            unsafe_allow_html=True,
+        )
+        gauge_slot.plotly_chart(_crear_gauge_riesgo(0, "BAJO"), use_container_width=True)
+        return
+
+    nivel = resultado["nivel_riesgo"]
+    tipo_alerta = resultado["tipo_alerta"]
+    if resultado.get("calibrando"):
+        alerta_slot.markdown(
+            f'<div class="hud-alert-banner" style="--c:{TEMA["accent_cyan"]}">'
+            "CALIBRANDO :: MANTENGA LOS OJOS ABIERTOS CON NORMALIDAD</div>",
+            unsafe_allow_html=True,
+        )
+        _panel_calibracion(metricas_slot, resultado)
+    else:
+        color = _COLOR_NIVEL.get(nivel, TEMA["accent_green"])
+        alerta_slot.markdown(
+            f'<div class="hud-alert-banner" style="--c:{color}">'
+            f"RIESGO {nivel} :: {tipo_alerta.replace('_', ' ')}</div>",
+            unsafe_allow_html=True,
+        )
+        _panel_metricas_placeholder(metricas_slot, resultado)
+
+    gauge_slot.plotly_chart(_crear_gauge_riesgo(resultado["riesgo"], nivel), use_container_width=True)
+    barras_slot.plotly_chart(
+        _crear_barras_variables(
+            resultado.get("somnolencia", 0.0),
+            resultado.get("distraccion", 0.0),
+            resultado.get("celular", 0.0),
+        ),
+        use_container_width=True,
     )
-
-    try:
-        frame_idx = 0
-        while st.session_state.get("activo", False):
-            ok, frame, _ts = camara.read()
-            if not ok or frame is None:
-                time.sleep(0.05)
-                continue
-
-            resultado = pipeline.procesar_frame(frame)
-            frame_rgb = resultado["frame"][:, :, ::-1]
-            video_slot.image(frame_rgb, channels="RGB", use_container_width=True)
-
-            nivel = resultado["nivel_riesgo"]
-            tipo_alerta = resultado["tipo_alerta"]
-            if resultado.get("calibrando"):
-                alerta_slot.markdown(
-                    f'<div class="hud-alert-banner" style="--c:{TEMA["accent_cyan"]}">'
-                    f"CALIBRANDO :: MANTENGA LOS OJOS ABIERTOS CON NORMALIDAD</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                color = _COLOR_NIVEL.get(nivel, TEMA["accent_green"])
-                alerta_slot.markdown(
-                    f'<div class="hud-alert-banner" style="--c:{color}">'
-                    f"RIESGO {nivel} :: {tipo_alerta.replace('_', ' ')}</div>",
-                    unsafe_allow_html=True,
-                )
-
-            gauge_slot.plotly_chart(
-                _crear_gauge_riesgo(resultado["riesgo"], nivel),
-                use_container_width=True,
-                key=f"gauge_riesgo_{frame_idx}",
-            )
-            barras_slot.plotly_chart(
-                _crear_barras_variables(
-                    resultado.get("somnolencia", 0.0),
-                    resultado.get("distraccion", 0.0),
-                    resultado.get("celular", 0.0),
-                ),
-                use_container_width=True,
-                key=f"barras_variables_{frame_idx}",
-            )
-            frame_idx += 1
-            if resultado.get("calibrando"):
-                _panel_calibracion(metricas_slot, resultado)
-            else:
-                _panel_metricas_placeholder(metricas_slot, resultado)
-            _panel_estadisticas(stats_slot, pipeline.session_stats)
-            _panel_historial(historial_slot, pipeline.session_stats)
-    finally:
-        camara.release()
+    _panel_estadisticas(stats_slot, contexto.video_processor.pipeline.session_stats)
+    _panel_historial(historial_slot, contexto.video_processor.pipeline.session_stats)
 
 
 if __name__ == "__main__":
