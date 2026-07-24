@@ -1,0 +1,16 @@
+# Python build and runtime artifacts
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+
+# Local logs and editor settings
+logs/
+.vscode/
+.idea/
+
+# Environment files
+.env
+*.env

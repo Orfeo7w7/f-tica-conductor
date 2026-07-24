@@ -1,0 +1,62 @@
+# Configuración del Sistema Experto de Seguridad Vial
+
+camera:
+  index: 0
+  width: 1280
+  height: 720
+  target_fps: 30
+
+logging:
+  level: INFO
+  file: logs/app.log
+  max_bytes: 1048576
+  backup_count: 3
+
+thresholds:
+  ear_closed: 0.21          # EAR por debajo de este valor = ojo cerrado
+  ear_blink_min_frames: 2   # frames mínimos para contar un parpadeo
+  mar_yawn: 0.60            # MAR por encima de este valor = boca abierta (bostezo)
+  yawn_min_seconds: 1.2     # duración mínima sostenida para contar bostezo
+  drowsy_eye_closed_seconds: 1.0   # segundos de ojo cerrado que ya se consideran somnolencia
+  head_yaw_deviation_deg: 20.0     # grados de desvío horizontal = cabeza desviada
+  head_pitch_deviation_deg: 18.0   # grados de desvío vertical = cabeza desviada
+  phone_hand_face_distance: 0.35   # distancia normalizada mano-cara para sospecha de celular
+  phone_min_seconds: 1.5           # persistencia mínima para confirmar uso de celular
+
+session:
+  alert_cooldown_seconds: 3.0
+  history_max_events: 200
+
+calibracion:
+  habilitado: true             # si es false, se usan siempre los umbrales fijos de arriba
+  duracion_seg: 30.0           # duracion de la fase inicial de calibracion (y de cada recalibracion)
+  k_desvios: 2.0                # umbral = media +/- k * desvio_estandar
+  alpha_ema: 0.02               # suavizado de la media movil ponderada tras calibrar (bajo = adaptacion lenta)
+  muestras_minimas: 50          # muestras minimas para poder cerrar la fase de calibracion
+  factor_espera_maxima: 3.0     # calibra igual (con lo que haya) tras duracion_seg * este factor, para no quedar atascado
+  ear_umbral_min: 0.12          # cota de seguridad: el umbral EAR personalizado nunca sale de este rango
+  ear_umbral_max: 0.28
+  mar_umbral_min: 0.35          # cota de seguridad: el umbral MAR personalizado nunca sale de este rango
+  mar_umbral_max: 0.85
+
+alarma_sonora:
+  habilitado: true
+  ventana_perclos_seg: 180.0      # 3 minutos: ventana movil sobre la que se calcula el PERCLOS
+  umbral_perclos: 0.15            # % de tiempo con ojos cerrados en la ventana; valor de partida, no validado en campo (ver CLAUDE.md)
+  cooldown_pitido_seg: 30.0       # minimo entre pitidos; se repite cada este intervalo mientras la condicion persista
+  gap_maximo_seg: 2.0             # huecos (sin rostro, calibrando, monitoreo pausado) se recortan a esto, nunca cuentan enteros como "cerrado" ni "abierto"
+  frecuencia_hz: 1000
+  duracion_pitido_ms: 200
+  repeticiones: 3
+
+theme:
+  background: "#05080c"
+  panel_bg: "#0b1119"
+  accent_cyan: "#00e5ff"
+  accent_amber: "#ffb300"
+  accent_orange: "#ff6d00"
+  accent_red: "#ff1744"
+  accent_green: "#00e676"
+  text_primary: "#d7e3ec"
+  text_dim: "#5b7185"
+  border: "#1b2a38"
